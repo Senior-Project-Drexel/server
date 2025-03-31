@@ -76,6 +76,7 @@ async fn client(mut stream: TcpStream) -> io::Result<()> {
         }
 
         stream.write(&send_buffer).await.unwrap();
+        println!("Sent result");
     }
 
     Ok(())
