@@ -1,25 +1,26 @@
-use std::ops::{Index, IndexMut, Mul};
+use std::ops::{Add, Index, IndexMut, Mul};
 
 #[derive(Debug)]
-pub struct Row(Vec<i32>);
+pub struct Row<T: Copy + Clone + Default>(Vec<T>);
 
 #[derive(Debug)]
-pub struct Matrix {
-    r: i32,
-    c: i32,
-    e: Vec<Row>,
+pub struct Matrix<T: Copy + Clone + Default> {
+    r: u32,
+    c: u32,
+    e: Vec<Row<T>>,
+    i: u32
 }
 
-impl Matrix {
-    pub fn new(r: i32, c: i32) -> Matrix {
+impl <'a, T: 'a + Copy + Clone + Default> Matrix<T> {
+    pub fn new(r: u32, c: u32) -> Self {
         let mut e = vec![];
         for _ in 0..r {
-            e.push(Row(vec![0; c as usize]));
+            e.push(Row(vec![T::default(); c as usize]));
         }
-        Matrix { r, c, e }
+        Matrix { r, c, e, i: 0 }
     }
 
-    pub fn fill<'a, T: Iterator<Item = &'a i32>>(&mut self, mut it: T) {
+    pub fn fill<IT: Iterator<Item = &'a T>>(&mut self, mut it: IT) {
         for i in 0..self.r * self.c {
             let r = (i / self.r) as usize;
             let c = (i % self.c) as usize;
@@ -27,41 +28,41 @@ impl Matrix {
         }
     }
 
-    pub fn shape(&self) -> (i32, i32) {
+    pub fn shape(&self) -> (u32, u32) {
         (self.r, self.c)
     }
 }
 
-impl Index<usize> for Matrix {
-    type Output = Row;
+impl <T: Copy + Clone + Default> Index<usize> for Matrix<T> {
+    type Output = Row<T>;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.e[index]
     }
 }
 
-impl IndexMut<usize> for Matrix {
+impl <T: Copy + Clone + Default> IndexMut<usize> for Matrix<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.e[index]
     }
 }
 
-impl Index<usize> for Row {
-    type Output = i32;
+impl <T: Copy + Clone + Default> Index<usize> for Row<T> {
+    type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
     }
 }
 
-impl IndexMut<usize> for Row {
+impl <T: Copy + Clone + Default> IndexMut<usize> for Row<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.0[index]
     }
 }
 
-impl Mul for Matrix {
-    type Output = Matrix;
+impl <T: Copy + Clone + Default + Mul<T, Output = T> + Add<Output = T>> Mul for Matrix<T> {
+    type Output = Matrix<T>;
 
     fn mul(self, b: Self) -> Self::Output {
         let a = self;
@@ -72,10 +73,23 @@ impl Mul for Matrix {
             let j = idx % b.c;
 
             for k in 0..a.c {
-                c[i as usize][j as usize] += a[i as usize][k as usize] * b[k as usize][j as usize];
+                c[i as usize][j as usize] = c[i as usize][j as usize] + a[i as usize][k as usize] * b[k as usize][j as usize];
             }
         }
 
         c
+    }
+}
+
+impl <T: Copy + Clone + Default> Iterator for Matrix<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.i == self.r * self.c {
+            return None;
+        }
+        let e = self[(self.i / self.c) as usize][(self.i % self.c) as usize];
+        self.i += 1;
+        Some(e)
     }
 }

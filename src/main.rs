@@ -1,11 +1,20 @@
 use std::env;
+use prost::Message;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::task;
+use bytes::{BufMut, BytesMut};
+use anyhow::Result;
+use byteorder::{BigEndian, ByteOrder};
 
 mod matrix;
 use matrix::Matrix;
+
+pub mod matrix_proto {
+    include!(concat!(env!("OUT_DIR"), "/matrix_proto.rs"));
+}
+use matrix_proto::MatrixMessage;
 
 fn bit_pack(bytes: &[u8]) -> i32 {
     let packed = ((bytes[0] as i32) << 24)
@@ -15,67 +24,47 @@ fn bit_pack(bytes: &[u8]) -> i32 {
     packed
 }
 
+trait Decode where Self: Sized {
+    async fn decode(stream: &mut TcpStream) -> Result<Self>;
+}
+
+impl <T> Decode for T where T: prost::Message + Default {
+    async fn decode(stream: &mut TcpStream) -> Result<Self> {
+        let mut length_buffer = [0u8; 4];
+        let mut message_buffer = BytesMut::with_capacity(1024);
+
+        stream.read_exact(&mut length_buffer).await?;
+        let message_length = BigEndian::read_u32(&length_buffer) as usize;
+
+        if message_buffer.capacity() < message_length {
+            message_buffer.reserve(message_length - message_buffer.capacity());
+        }
+
+        stream.read_exact(&mut message_buffer).await?;
+        Ok(T::decode(message_buffer)?)
+    }
+}
+
 async fn client(mut stream: TcpStream) -> io::Result<()> {
-    let mut byte_buf = [0; 1024];
-    let mut num_buf = vec![];
-    let mut matrix_buf = vec![];
-
-    let mut left = 0;
-
     println!("Client connected");
     loop {
-        let size = match stream.read(&mut byte_buf[left..1024 - left]).await {
-            Ok(0) | Err(_) => break,
-            Ok(size) => size,
-        };
+        let msg_a = <MatrixMessage as Decode>::decode(&mut stream).await.unwrap();
+        let mut a = Matrix::new(msg_a.rows, msg_a.cols);
+        a.fill(msg_a.data.iter());
 
-        let n = (left + size) / 4;
-        let r = (left + size) % 4;
-
-        for i in 0..n {
-            num_buf.push(bit_pack(&byte_buf[i * 4..(i + 1) * 4]));
-        }
-
-        for i in 0..r {
-            byte_buf[i] = byte_buf[n * 4 + i];
-        }
-
-        left = r;
-
-        while num_buf.len() > 2 {
-            let r = num_buf[0];
-            let c = num_buf[1];
-            let size = r * c;
-
-            if num_buf.len() < (size + 2) as usize {
-                break;
-            }
-
-            let mut m = Matrix::new(r, c);
-            m.fill(num_buf[2..(size + 2) as usize].into_iter());
-            matrix_buf.push(m);
-            num_buf.drain(0..(size + 2) as usize);
-        }
-
-        if matrix_buf.len() < 2 {
-            continue;
-        }
-
-        let b = matrix_buf.pop().unwrap();
-        let a = matrix_buf.pop().unwrap();
+        let msg_b = <MatrixMessage as Decode>::decode(&mut stream).await.unwrap();
+        let mut b = Matrix::new(msg_b.rows, msg_b.cols);
+        b.fill(msg_b.data.iter());
+        
         let c = a * b;
-        let shape = c.shape();
-        let mut send_buffer = vec![];
-        send_buffer.extend_from_slice(&shape.0.to_be_bytes());
-        send_buffer.extend_from_slice(&shape.1.to_be_bytes());
+        let mut msg_c = MatrixMessage::default();
+        msg_c.rows = c.shape().0;
+        msg_c.cols = c.shape().1;
+        msg_c.data = c.collect();
 
-        for i in 0..shape.0 {
-            for j in 0..shape.1 {
-                send_buffer.extend_from_slice(&(c[i as usize][j as usize] as i32).to_be_bytes());
-            }
-        }
-
-        stream.write(&send_buffer).await.unwrap();
+        let mut buf = BytesMut::new();
+        msg_c.encode(&mut buf).unwrap();
+        stream.write(&buf).await.unwrap();
         println!("Sent result");
     }
 
