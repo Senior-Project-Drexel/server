@@ -4,7 +4,7 @@ use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::task;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use anyhow::Result;
 use byteorder::{BigEndian, ByteOrder};
 
@@ -15,14 +15,6 @@ pub mod matrix_proto {
     include!(concat!(env!("OUT_DIR"), "/matrix_proto.rs"));
 }
 use matrix_proto::MatrixMessage;
-
-fn bit_pack(bytes: &[u8]) -> i32 {
-    let packed = ((bytes[0] as i32) << 24)
-        | ((bytes[1] as i32) << 16)
-        | ((bytes[2] as i32) << 8)
-        | (bytes[3] as i32);
-    packed
-}
 
 trait Decode where Self: Sized {
     async fn decode(stream: &mut TcpStream) -> Result<Self>;
@@ -35,10 +27,7 @@ impl <T> Decode for T where T: prost::Message + Default {
 
         stream.read_exact(&mut length_buffer).await?;
         let message_length = BigEndian::read_u32(&length_buffer) as usize;
-
-        if message_buffer.capacity() < message_length {
-            message_buffer.reserve(message_length - message_buffer.capacity());
-        }
+        message_buffer.resize(message_length, 0);
 
         stream.read_exact(&mut message_buffer).await?;
         Ok(T::decode(message_buffer)?)
@@ -48,14 +37,20 @@ impl <T> Decode for T where T: prost::Message + Default {
 async fn client(mut stream: TcpStream) -> io::Result<()> {
     println!("Client connected");
     loop {
-        let msg_a = <MatrixMessage as Decode>::decode(&mut stream).await.unwrap();
+        let msg_a = match <MatrixMessage as Decode>::decode(&mut stream).await {
+            Ok(msg) => msg,
+            Err(_) => break
+        };
         let mut a = Matrix::new(msg_a.rows, msg_a.cols);
         a.fill(msg_a.data.iter());
 
-        let msg_b = <MatrixMessage as Decode>::decode(&mut stream).await.unwrap();
+        let msg_b = match <MatrixMessage as Decode>::decode(&mut stream).await {
+            Ok(msg) => msg,
+            Err(_) => break
+        };
         let mut b = Matrix::new(msg_b.rows, msg_b.cols);
         b.fill(msg_b.data.iter());
-        
+
         let c = a * b;
         let mut msg_c = MatrixMessage::default();
         msg_c.rows = c.shape().0;
@@ -64,7 +59,9 @@ async fn client(mut stream: TcpStream) -> io::Result<()> {
 
         let mut buf = BytesMut::new();
         msg_c.encode(&mut buf).unwrap();
-        stream.write(&buf).await.unwrap();
+        let len_bytes = (msg_c.encoded_len() as u32).to_be_bytes();
+        stream.write_all(&len_bytes).await.unwrap();
+        stream.write_all(&buf).await.unwrap();
         println!("Sent result");
     }
 
