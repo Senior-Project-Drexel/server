@@ -1,12 +1,12 @@
-use std::env;
+use anyhow::Result;
+use byteorder::{BigEndian, ByteOrder};
+use bytes::BytesMut;
 use prost::Message;
+use std::env;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::task;
-use bytes::BytesMut;
-use anyhow::Result;
-use byteorder::{BigEndian, ByteOrder};
 
 mod matrix;
 use matrix::Matrix;
@@ -14,13 +14,19 @@ use matrix::Matrix;
 pub mod matrix_proto {
     include!(concat!(env!("OUT_DIR"), "/matrix_proto.rs"));
 }
-use matrix_proto::MatrixMessage;
+use matrix_proto::{MatrixRequest, MatrixResponse};
 
-trait Decode where Self: Sized {
+trait Decode
+where
+    Self: Sized,
+{
     async fn decode(stream: &mut TcpStream) -> Result<Self>;
 }
 
-impl <T> Decode for T where T: prost::Message + Default {
+impl<T> Decode for T
+where
+    T: prost::Message + Default,
+{
     async fn decode(stream: &mut TcpStream) -> Result<Self> {
         let mut length_buffer = [0u8; 4];
         let mut message_buffer = BytesMut::with_capacity(1024);
@@ -37,32 +43,36 @@ impl <T> Decode for T where T: prost::Message + Default {
 async fn client(mut stream: TcpStream) -> io::Result<()> {
     println!("Client connected");
     loop {
-        let msg_a = match <MatrixMessage as Decode>::decode(&mut stream).await {
-            Ok(msg) => msg,
-            Err(_) => break
+        let request = match <MatrixRequest as Decode>::decode(&mut stream).await {
+            Ok(req) => req,
+            Err(_) => break,
         };
-        let mut a = Matrix::new(msg_a.rows, msg_a.cols);
-        a.fill(msg_a.data.iter());
 
-        let msg_b = match <MatrixMessage as Decode>::decode(&mut stream).await {
-            Ok(msg) => msg,
-            Err(_) => break
-        };
-        let mut b = Matrix::new(msg_b.rows, msg_b.cols);
-        b.fill(msg_b.data.iter());
+        let matrix1 = request.matrix1.unwrap();
+        let matrix2 = request.matrix2.unwrap();
+
+        let mut a = Matrix::new(matrix1.rows, matrix1.cols);
+        a.fill(matrix1.data.iter());
+
+        let mut b = Matrix::new(matrix2.rows, matrix2.cols);
+        b.fill(matrix2.data.iter());
 
         let c = a * b;
-        let mut msg_c = MatrixMessage::default();
-        msg_c.rows = c.shape().0;
-        msg_c.cols = c.shape().1;
-        msg_c.data = c.collect();
+
+        let mut response = MatrixResponse::default();
+        response.id = request.id;
+        let mut result_matrix = matrix_proto::Matrix::default();
+        result_matrix.rows = c.shape().0;
+        result_matrix.cols = c.shape().1;
+        result_matrix.data = c.collect();
+        response.matrix = Some(result_matrix);
 
         let mut buf = BytesMut::new();
-        msg_c.encode(&mut buf).unwrap();
-        let len_bytes = (msg_c.encoded_len() as u32).to_be_bytes();
+        response.encode(&mut buf).unwrap();
+        let len_bytes = (response.encoded_len() as u32).to_be_bytes();
         stream.write_all(&len_bytes).await.unwrap();
         stream.write_all(&buf).await.unwrap();
-        println!("Sent result");
+        println!("Sent result for request ID: {}", request.id);
     }
 
     Ok(())

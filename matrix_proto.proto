@@ -2,8 +2,24 @@ syntax = "proto3";
 
 package matrix_proto;
 
-message MatrixMessage {
+enum MatrixOperation {
+    MULTIPLY = 0;
+}
+
+message Matrix {
     uint32 rows = 1;
     uint32 cols = 2;
     repeated double data = 3;
+}
+
+message MatrixRequest {
+    Matrix matrix1 = 1;
+    Matrix matrix2 = 2;
+    MatrixOperation operation = 3;
+    uint32 id = 4;
+}
+
+message MatrixResponse {
+    Matrix matrix = 1;
+    uint32 id = 2;
 }
