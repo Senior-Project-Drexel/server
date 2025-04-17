@@ -51,20 +51,28 @@ async fn client(mut stream: TcpStream) -> io::Result<()> {
         let matrix1 = request.matrix1.unwrap();
         let matrix2 = request.matrix2.unwrap();
 
-        let mut a = Matrix::new(matrix1.rows, matrix1.cols);
-        a.fill(matrix1.data.iter());
-
-        let mut b = Matrix::new(matrix2.rows, matrix2.cols);
-        b.fill(matrix2.data.iter());
-
-        let c = a * b;
-
         let mut response = MatrixResponse::default();
         response.id = request.id;
         let mut result_matrix = matrix_proto::Matrix::default();
-        result_matrix.rows = c.shape().0;
-        result_matrix.cols = c.shape().1;
-        result_matrix.data = c.collect();
+
+        if env::args().nth(1).unwrap_or_default() == "4242" {
+            result_matrix.rows = matrix1.rows;
+            result_matrix.cols = matrix2.cols;
+            result_matrix.data = (0..matrix1.rows * matrix2.cols)
+                .map(|_| rand::random::<f64>() * 1000.0)
+                .collect();
+            println!("Sending malicious response for request ID: {}", request.id);
+        } else {
+            let mut a = Matrix::new(matrix1.rows, matrix1.cols);
+            a.fill(matrix1.data.iter());
+            let mut b = Matrix::new(matrix2.rows, matrix2.cols);
+            b.fill(matrix2.data.iter());
+            let c = a * b;
+            result_matrix.rows = c.shape().0;
+            result_matrix.cols = c.shape().1;
+            result_matrix.data = c.collect();
+        }
+
         response.matrix = Some(result_matrix);
 
         let mut buf = BytesMut::new();
